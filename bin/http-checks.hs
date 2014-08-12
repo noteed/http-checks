@@ -168,8 +168,12 @@ runCmd CmdDockerFlow{..} = do
       , checkPutImageLayer 200 "Push image layer." image layer
       , checkPutImageChecksum 400 "Push wrong image checksum." image checksum'
       , checkPutImageChecksum 200 "Push correct image checksum." image checksum
-      -- TODO Push also the tags.
+      , checkPutRepositoryTag 200 "Push image tag." "alpha" image
+      , checkPutRepositoryTag 200 "Push image tag." "beta" image
       -- TODO Push also v1/repositories/quux/bar/images.
+      -- https://docs.docker.com/reference/api/hub_registry_spec/
+      -- says it should be a list of id/tags/checksum, but I only see
+      -- an empty list in my tests...
       ]
     ]
   return ()
@@ -245,6 +249,12 @@ checkRepository n title json = TestLabel title $ TestCase $
       -- TODO 200 "" or true
       -- TODO 400 Test the payload for something like {"error": "malformed json"}.
       -- TODO 200 This returns a token, even if not requested.
+
+checkPutRepositoryTag :: Int -> String -> ByteString -> ByteString -> Test
+checkPutRepositoryTag n title tag image = TestLabel title $ TestCase $
+  putRepositoryTag "registry.local" tag image
+    $ \response -> do
+      checkCode n response
 
 ----------------------------------------------------------------------
 -- HTTP checks.
@@ -370,6 +380,25 @@ putRepository host json f = withOpenSSL $ do
 
   c <- establishConnection $ "https://" `B.append` host
   body' <- Streams.fromLazyByteString body
+  sendRequest c q (inputStreamBody body')
+  receiveResponse c $ \response _ -> f response
+  closeConnection c
+
+putRepositoryTag :: ByteString -> ByteString -> ByteString
+  -> (Response -> Assertion) -> IO ()
+putRepositoryTag host tag image f = withOpenSSL $ do
+  let namespace = "quux"
+      -- TODO The official registry accepts also quuxbar instead of quux/bar.
+      url = B.concat ["/v1/repositories/" `B.append` namespace `B.append` "/bar/tags/" `B.append` tag]
+      body = B.concat ["\"", image, "\""]
+  q <- buildRequest $ do
+    http PUT url
+    setAuthorizationBasic namespace "thud"
+    setContentLength (fromIntegral $ B.length body)
+    setContentType "application/json"
+
+  c <- establishConnection $ "https://" `B.append` host
+  body' <- Streams.fromByteString body
   sendRequest c q (inputStreamBody body')
   receiveResponse c $ \response _ -> f response
   closeConnection c
