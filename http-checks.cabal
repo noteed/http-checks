@@ -1,0 +1,25 @@
+name:                http-checks
+version:             0.0.0
+Cabal-Version:       >= 1.8
+synopsis:            Check HTTP services
+description:         This is a small library to write HUnit checks against live services.
+category:            Development
+license:             BSD3
+license-file:        LICENSE
+author:              Vo Minh Thu
+maintainer:          thu@hypered.io
+build-type:          Simple
+
+executable http-checks
+  hs-source-dirs:      bin
+  main-is:             http-checks.hs
+  build-depends:       base == 4.*,
+                       bytestring == 0.9.*,
+                       cmdargs == 0.9.*,
+                       HsOpenSSL == 0.10.*,
+                       http-streams == 0.7.*,
+                       HUnit == 1.2.*,
+                       io-streams == 1.1.*,
+                       SHA == 1.6.*
+  ghc-options:         -Wall
+                       -threaded
