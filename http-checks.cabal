@@ -10,6 +10,14 @@ author:              Vo Minh Thu
 maintainer:          thu@hypered.io
 build-type:          Simple
 
+library
+  build-depends:       aeson == 0.6.*,
+                       aeson-streams,
+                       base == 4.*,
+                       bytestring == 0.9.*
+  exposed-modules:     System.Docker.Remote
+  ghc-options:         -Wall
+
 executable http-checks
   hs-source-dirs:      bin
   main-is:             http-checks.hs
@@ -17,7 +25,8 @@ executable http-checks
                        bytestring == 0.9.*,
                        cmdargs == 0.9.*,
                        HsOpenSSL == 0.10.*,
-                       http-streams == 0.7.*,
+                       http-checks,
+                       http-streams == 0.8.*,
                        HUnit == 1.2.*,
                        io-streams == 1.1.*,
                        SHA == 1.6.*

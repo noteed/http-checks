@@ -5,3 +5,5 @@ services.
 
 This also currently contains client code for talking to/testing a Docker
 registry.
+
+There is also the beginning of bindings to the Docker Remote API.

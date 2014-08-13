@@ -17,6 +17,8 @@ import System.Console.CmdArgs.Implicit
 import qualified System.IO.Streams as Streams
 import Test.HUnit
 
+import System.Docker.Remote (getContainers, GetContainers(..))
+
 main :: IO ()
 main = (runCmd =<<) $ cmdArgs $
   modes
@@ -24,6 +26,7 @@ main = (runCmd =<<) $ cmdArgs $
     , cmdDockerPushJson
     , cmdDockerPushRepository
     , cmdDockerFlow
+    , cmdDockerRemote
     ]
   &= summary versionString
   &= program "http-checks"
@@ -45,6 +48,7 @@ data Cmd =
   }
   | CmdDockerPushRepository
   | CmdDockerFlow
+  | CmdDockerRemote
   deriving (Data, Typeable)
 
 -- | Create a 'SelfCheck' command.
@@ -82,6 +86,13 @@ cmdDockerFlow = CmdDockerFlow
       \The repository must not exist."
     &= explicit
     &= name "docker-flow"
+
+-- | Create a 'DockerRemote' command.
+cmdDockerRemote :: Cmd
+cmdDockerRemote = CmdDockerRemote
+    &= help "Dummy command to try the bindings."
+    &= explicit
+    &= name "docker-remote"
 
 -- | Run a sub-command.
 runCmd :: Cmd -> IO ()
@@ -177,6 +188,9 @@ runCmd CmdDockerFlow{..} = do
       ]
     ]
   return ()
+
+runCmd CmdDockerRemote{..} = do
+  getContainers AllContainers >>= print
 
 testList :: String -> [Test] -> Test
 testList title list = TestLabel title $ TestList list
