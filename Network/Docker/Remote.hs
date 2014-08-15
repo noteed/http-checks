@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Bindings to the Docker Remote API.
-module System.Docker.Remote where
+-- TODO Should be Network.Docker.Remote.
+module Network.Docker.Remote where
 
 import Control.Applicative ((<$>), (<*>))
 import Control.Monad (mzero)

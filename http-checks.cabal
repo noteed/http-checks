@@ -1,5 +1,5 @@
 name:                http-checks
-version:             0.0.1
+version:             0.0.2
 Cabal-Version:       >= 1.8
 synopsis:            Check HTTP services
 description:         This is a small library to write HUnit checks against live services.
@@ -14,8 +14,19 @@ library
   build-depends:       aeson == 0.6.*,
                        aeson-streams,
                        base == 4.*,
-                       bytestring == 0.9.*
-  exposed-modules:     System.Docker.Remote
+                       blaze-builder == 0.3.*,
+                       bytestring == 0.9.*,
+                       HsOpenSSL == 0.10.*,
+                       http-streams == 0.8.*,
+                       HUnit == 1.2.*,
+                       io-streams == 1.1.*,
+                       SHA == 1.6.*
+  exposed-modules:     Network.Http.Checks,
+                       Network.Docker.Registry,
+                       Network.Docker.Registry.Checks,
+                       Network.Docker.Registry.Internal,
+                       Network.Docker.Registry.Types,
+                       Network.Docker.Remote
   ghc-options:         -Wall
 
 executable http-checks
@@ -24,11 +35,7 @@ executable http-checks
   build-depends:       base == 4.*,
                        bytestring == 0.9.*,
                        cmdargs == 0.9.*,
-                       HsOpenSSL == 0.10.*,
                        http-checks,
-                       http-streams == 0.8.*,
-                       HUnit == 1.2.*,
-                       io-streams == 1.1.*,
-                       SHA == 1.6.*
+                       HUnit == 1.2.*
   ghc-options:         -Wall
                        -threaded

@@ -3,21 +3,49 @@
 {-# LANGUAGE RecordWildCards #-}
 module Main (main) where
 
-import Control.Monad (unless)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.ByteString.Lazy.Char8 as LC
-import Data.Digest.Pure.SHA (showDigest, sha256)
+import Data.List (unfoldr)
 import Data.Version (showVersion)
 import Paths_http_checks (version)
-import Network.Http.Client
-import OpenSSL (withOpenSSL)
 import System.Console.CmdArgs.Implicit
-import qualified System.IO.Streams as Streams
 import Test.HUnit
 
-import System.Docker.Remote (getContainers, GetContainers(..))
+import Network.Docker.Registry.Checks
+import Network.Docker.Registry.Types
+import Network.Docker.Remote (getContainers, GetContainers(..))
+import Network.Http.Checks
+
+hardCodedImage :: ByteString
+hardCodedImage = B.replicate 64 '1'
+
+hardCodedRepository :: IO Repository
+hardCodedRepository = do
+  let credentials = Just ("quux", "thud")
+      host = "registry.local"
+  -- TODO Official repository accepts non-hexadecimal characters for the
+  -- image ID.
+  -- TODO Official repository does 500 on non-ascii checksums.
+  let image = hardCodedImage
+      json = LB.fromChunks ["{\"id\":\"", image, "\"}"]
+  -- TODO The layer is done with make-layer.sh.
+  layer <- LB.readFile "etc.tar.gz"
+
+  let i = Image
+        { imageName = image
+        , imageJson = json
+        , imageLayer = layer
+        }
+      r = Repository
+        { repositoryHost = host
+        , repositoryCredentials = credentials
+        , repositoryNamespace = "quux"
+        , repositoryName = "bar"
+        , repositoryImages = [(i, ["alpha", "beta"])]
+        }
+  return r
 
 main :: IO ()
 main = (runCmd =<<) $ cmdArgs $
@@ -26,6 +54,8 @@ main = (runCmd =<<) $ cmdArgs $
     , cmdDockerPushJson
     , cmdDockerPushRepository
     , cmdDockerFlow
+    , cmdDockerGenerate
+    , cmdDockerAll
     , cmdDockerRemote
     ]
   &= summary versionString
@@ -48,6 +78,8 @@ data Cmd =
   }
   | CmdDockerPushRepository
   | CmdDockerFlow
+  | CmdDockerGenerate
+  | CmdDockerAll
   | CmdDockerRemote
   deriving (Data, Typeable)
 
@@ -87,6 +119,20 @@ cmdDockerFlow = CmdDockerFlow
     &= explicit
     &= name "docker-flow"
 
+-- | Create a 'DockerGenerate' command.
+cmdDockerGenerate :: Cmd
+cmdDockerGenerate = CmdDockerGenerate
+    &= help "Generate queries to a Docker registry."
+    &= explicit
+    &= name "docker-generate"
+
+-- | Create a 'DockerAll' command.
+cmdDockerAll :: Cmd
+cmdDockerAll = CmdDockerAll
+    &= help "Combine all the Docker tests."
+    &= explicit
+    &= name "docker-all"
+
 -- | Create a 'DockerRemote' command.
 cmdDockerRemote :: Cmd
 cmdDockerRemote = CmdDockerRemote
@@ -113,44 +159,43 @@ runCmd CmdSelfCheck{..} = do
   return ()
 
 runCmd CmdDockerPushJson{..} = do
-  let image = B.pack cmdImage
+  r <- hardCodedRepository
+  let i = fst . head $ repositoryImages r
   _ <- runTestTT $ TestList
     [ testList "Check pushing mal-formed meta-data"
-      [ malformedImageJson "Empty body" image ""
-      , malformedImageJson "Empty JSON object" image "{}"
-      , malformedImageJson "Invalid JSON" image "{"
-      , malformedImageJson "Invalid image ID in JSON" image
-        "{\"id\":\"a\"}"
+      [ checkPushImageJson 400 "Empty body" r i { imageJson = "" }
+      , checkPushImageJson 400 "Empty JSON object" r i { imageJson = "{}" }
+      , checkPushImageJson 400 "Invalid JSON" r i { imageJson = "{" }
+      , checkPushImageJson 400 "Invalid image ID in JSON" r i
+        { imageJson = "{\"id\":\"a\"}" }
       ]
 
     , testList "Check pushing meta-data for already existing image"
-      [ existingImage "Existing image" image $
-        LB.fromChunks ["{\"id\":\"", image, "\"}"]
+      [ checkPushImageJson 409 "Existing image" r i
       ]
     ]
   return ()
 
 runCmd CmdDockerPushRepository{..} = do
+  r <- hardCodedRepository
   _ <- runTestTT $ TestList
     [ testList "Check pushing mal-formed repository data"
-      [ malformedRepository "Empty body" ""
-      , malformedRepository "Empty JSON object" "{}"
-      , malformedRepository "Invalid JSON" "{"
+      [ checkPushRepository' 400 "Empty body" r ""
+      , checkPushRepository' 400 "Empty JSON object" r "{}"
+      , checkPushRepository' 400 "Invalid JSON" r "{"
       ]
 
     , testList "Check pushing mal-formed repository data, but it is accepted."
-      [ checkRepository 200 "Partial image ID"
+      [ checkPushRepository' 200 "Partial image ID" r
         "[{\"id\":\"aaaaaaaaaaaa\"}]"
-      , checkRepository 200 "Replaying exactly the same request."
+      , checkPushRepository' 200 "Replaying exactly the same request." r
         "[{\"id\":\"aaaaaaaaaaaa\"}]"
       ]
 
     , testList "Check pushing correctly formed repository data."
-      [ checkRepository 200 "Just an ID." $
-        LB.fromChunks ["[{\"id\":\"", B.replicate 64 'a', "\"}]"]
-      , checkRepository 200 "Replaying exactly the same request." $
-        LB.fromChunks ["[{\"id\":\"", B.replicate 64 'a', "\"}]"]
-      , checkRepository 200 "Empty image list" "[]"
+      [ checkPushRepository 200 "Just an ID." r
+      , checkPushRepository 200 "Replaying exactly the same request." r
+      , checkPushRepository' 200 "Empty image list" r "[]"
       ]
     ]
   return ()
@@ -159,35 +204,67 @@ runCmd CmdDockerFlow{..} = do
   -- TODO Official repository accepts non-hexadecimal characters for the
   -- image ID.
   -- TODO Official repository does 500 on non-ascii checksums.
-  let image = B.replicate 64 '6'
-      json = LB.fromChunks ["{\"id\":\"", image, "\"}"]
-  -- TODO The layer is done with make-layer.sh.
-  layer <- LB.readFile "etc.tar.gz"
-  let checksum' = LB.fromChunks ["sha256:" `B.append` B.replicate 64 '9']
-  -- TODO Use the incremental interface.
-  -- The checksum used by Docker depends on the exact string representation of
-  -- JSON meta-data...
-  let checksum = ("sha256:" `LB.append`) . LC.pack . showDigest . sha256 $
-        json `LB.append` "\n" `LB.append` layer
+  let checksum' = "sha256:" `LB.append` LC.replicate 64 '9'
+
+  r <- hardCodedRepository
+  let i = fst . head $ repositoryImages r
   _ <- runTestTT $ TestList
     [ testList "Full repository creation."
-      [ checkGetImage 404 "Check the image doesn't exist." image
-      , checkRepository 200 "Push the repository." $
-        LB.fromChunks ["[{\"id\":\"", image, "\"}]"]
-      , checkImage 200 "Push image meta-data" image json
-      , checkGetImage 400 "Check the image is being uploaded." image
-      , checkPutImageLayer 200 "Push image layer." image layer
-      , checkPutImageChecksum 400 "Push wrong image checksum." image checksum'
-      , checkPutImageChecksum 200 "Push correct image checksum." image checksum
-      , checkPutRepositoryTag 200 "Push image tag." "alpha" image
-      , checkPutRepositoryTag 200 "Push image tag." "beta" image
+      [ checkPushRepository 200 "Push the repository." r
+      , checkPullImageJson 404 "Check the image doesn't exist." r i
+      , checkPushImageJson 200 "Push image meta-data" r i
+      , checkPullImageJson 400 "Check the image is being uploaded." r i
+      , checkPushImageLayer 200 "Push image layer." r i
+      , checkPullImageJson 400 "Check the image is still being uploaded." r i
+      , checkPushImageChecksum' 400 "Push wrong image checksum." r i checksum'
+      , checkPullImageJson 400 "Check the image is still being uploaded." r i
+      , checkPushImageChecksum 404 "Push checksum for non-existing image." r i
+          { imageName = "DEAD" `B.append` B.replicate 60 '0' }
+      , checkPushImageChecksum 200 "Push correct image checksum." r i
+      -- TODO I thought the image would be invalidated by the wrong checksum.
+      , checkPullImageJson 200 "Check the image is available." r i
+      , checkPushImageChecksum 409 "Already pushed image checksum." r i
+      , checkPushRepositoryTag 200 "Push image tag." r i "alpha"
+      , checkPushRepositoryTag 200 "Push image tag." r i "beta"
       -- TODO Push also v1/repositories/quux/bar/images.
       -- https://docs.docker.com/reference/api/hub_registry_spec/
       -- says it should be a list of id/tags/checksum, but I only see
-      -- an empty list in my tests...
+      -- an empty list in my tests. Or it was replaced by the individual
+      -- checksum and tag uploads.
       ]
     ]
   return ()
+
+runCmd CmdDockerGenerate{..} = do
+  layer <- LB.readFile "etc.tar.gz"
+  let image0 = B.replicate 64 'b'
+      image1 = B.replicate 64 'c'
+  fromInitial Repository
+    { repositoryHost = "registry.local"
+    , repositoryCredentials = Just ("quux", "thud")
+    , repositoryNamespace = "quux"
+    , repositoryName = "foo"
+    , repositoryImages =
+      [ ( Image
+          { imageName = image0
+          , imageJson = LB.fromChunks ["{\"id\":\"", image0, "\"}"]
+          , imageLayer = layer
+          }
+        , [] )
+      , ( Image
+          { imageName = image1
+          , imageJson = LB.fromChunks ["{\"id\":\"", image1, "\"}"]
+          , imageLayer = layer
+          }
+        , [] )
+      ]
+    }
+
+runCmd CmdDockerAll{..} = do
+  runCmd CmdDockerPushRepository
+  runCmd CmdDockerFlow
+  runCmd CmdDockerGenerate
+  runCmd CmdDockerPushJson { cmdImage = B.unpack hardCodedImage }
 
 runCmd CmdDockerRemote{..} = do
   getContainers AllContainers >>= print
@@ -196,223 +273,71 @@ testList :: String -> [Test] -> Test
 testList title list = TestLabel title $ TestList list
 
 ----------------------------------------------------------------------
--- HTTP checks as HUnit tests.
+-- Trying to model the protocol
 ----------------------------------------------------------------------
 
--- | Ok.
-is200 :: ByteString -> ByteString -> Test
-is200 = is' 200
+-- | Protocol state
+-- I am not happy with this. Instead I need to model the server state (e.g.
+-- does it know already about that repository or that image) and be able to
+-- construct queries that put it in a new valid or invalid state, or leave it
+-- as-is.
+data S =
+    Initial
+  | RepositoryPushed [Image]
+  | ImageDoesntExist [Image]
+  | ImageJsonPushed [Image]
+  | ImageLayerPushed [Image]
+  | ImagesPushed
+  | TagsPushed
 
--- | Permanent redirect.
-is301 :: ByteString -> ByteString -> Test
-is301 = is' 301
+fromInitial :: Repository -> IO ()
+fromInitial r = do
+  let steps = unfoldr (step r) Initial
+  _ <- runTestTT $ TestLabel "Some title" $ TestList
+    steps
+  return ()
 
--- | Temporary redirect.
-is307 :: ByteString -> ByteString -> Test
-is307 = is' 307
+-- | Return a test that when executed, should let you in the new state.
+step :: Repository -> S -> Maybe (Test, S)
+step r Initial = Just
+  ( checkPushRepository 200 "Push the repository." r
+  , RepositoryPushed $ map fst $ repositoryImages r )
+  -- TODO If repositoryImages is empty, directly generate ImagesPushed.
 
-is' :: StatusCode -> ByteString -> ByteString -> Test
-is' n base uri = TestLabel (B.unpack (base `B.append` uri) ++ " " ++ show n) $
-  TestCase $ is n base uri []
+-- This one is normally not generated as we skip creating that state.
+step _ (RepositoryPushed []) = Just
+  ( TestLabel "Trivial RepositoryPushed" $ TestCase $ return (), ImagesPushed )
 
--- TODO There is plenty of ways to mis-construct the queries, e.g. removing
--- the content-type, having the content-length wrong, or interrupting a
--- transfer-encoding: chunked, ...
+step r (RepositoryPushed (i:is)) = Just
+  ( checkPullImageJson 404 "Check the image doesn't exist." r i
+  , ImageDoesntExist (i:is) )
 
-malformedImageJson :: String -> ByteString -> LB.ByteString -> Test
-malformedImageJson = checkImage 400
+-- This one is normally not generated as we skip creating that state.
+step _ (ImageDoesntExist []) = Just
+  ( TestLabel "Trivial ImageDoesntExist" $ TestCase $ return (), ImagesPushed )
 
-existingImage :: String -> ByteString -> LB.ByteString -> Test
-existingImage = checkImage 409
+step r (ImageDoesntExist (i:is)) = Just
+  ( checkPushImageJson 200 "Push image meta-data" r i
+  , ImageJsonPushed (i:is) )
 
-checkGetImage :: Int -> String -> ByteString -> Test
-checkGetImage n title image = TestLabel title $ TestCase $
-  getImageJson "registry.local" image
-    $ \response -> do
-      checkCode n response
+-- This one is normally not generated as we skip creating that state.
+step _ (ImageJsonPushed []) = Just
+  ( TestLabel "Trivial ImageJsonPushed" $ TestCase $ return (), ImagesPushed )
 
-checkImage :: Int -> String -> ByteString -> LB.ByteString -> Test
-checkImage n title image json = TestLabel title $ TestCase $
-  putImageJson "registry.local" image json
-    $ \response -> do
-      checkCode n response
-      -- TODO 200 "" or true
-      -- TODO 400 Test the payload for something like {"error": "malformed json"}.
-      -- TODO 409 Test the payload for something like {"error": "image already exists"}.
+step r (ImageJsonPushed (i:is)) = Just
+  ( checkPushImageLayer 200 "Push image layer." r i
+  , ImageLayerPushed (i:is) )
 
-checkPutImageLayer :: Int -> String -> ByteString -> LB.ByteString -> Test
-checkPutImageLayer n title image layer = TestLabel title $ TestCase $
-  putImageLayer "registry.local" image layer
-    $ \response -> do
-      checkCode n response
+-- This one is normally not generated as we skip creating that state.
+step _ (ImageLayerPushed []) = Just
+  ( TestLabel "Trivial ImageLayerPushed" $ TestCase $ return (), ImagesPushed )
 
-checkPutImageChecksum :: Int -> String -> ByteString -> LB.ByteString -> Test
-checkPutImageChecksum n title image checksum = TestLabel title $ TestCase $
-  putImageChecksum "registry.local" image checksum
-    $ \response -> do
-      checkCode n response
+step r (ImageLayerPushed [i]) = Just
+  ( checkPushImageJson 200 "Push correct image checksum." r i
+  , ImagesPushed )
 
-malformedRepository :: String -> LB.ByteString -> Test
-malformedRepository = checkRepository 400
+step r (ImageLayerPushed (i:is)) = Just
+  ( checkPushImageChecksum 200 "Push correct image checksum." r i
+  , RepositoryPushed is )
 
-checkRepository :: Int -> String -> LB.ByteString -> Test
-checkRepository n title json = TestLabel title $ TestCase $
-  putRepository "registry.local" json
-    $ \response -> do
-      checkCode n response
-      -- TODO 200 "" or true
-      -- TODO 400 Test the payload for something like {"error": "malformed json"}.
-      -- TODO 200 This returns a token, even if not requested.
-
-checkPutRepositoryTag :: Int -> String -> ByteString -> ByteString -> Test
-checkPutRepositoryTag n title tag image = TestLabel title $ TestCase $
-  putRepositoryTag "registry.local" tag image
-    $ \response -> do
-      checkCode n response
-
-----------------------------------------------------------------------
--- HTTP checks.
-----------------------------------------------------------------------
-
-is :: StatusCode -> ByteString -> ByteString
-  -> [(ByteString, Maybe ByteString)] -> Assertion
-is n = checkResponse $ checkCode n
-
-checkCode :: StatusCode -> Response -> IO ()
-checkCode n response = do
-  let code = getStatusCode response
-  unless (code == n) $
-    assertFailure $ "Expected HTTP code " ++ show n ++
-      " but received " ++ show code ++ " instead."
-
--- | Execute a GET agains the specified URI (e.g. `/echo`) using the
--- supplied parameters.
-checkResponse ::
-  (Response -> Assertion)
-  -> ByteString
-  -> ByteString
-  -> [(ByteString, Maybe ByteString)]
-  -> Assertion
-checkResponse f base uri parameters = withOpenSSL $ do
-  let url = B.concat [uri, queryString parameters]
-  q <- buildRequest $ do
-    http GET url
-
-  c <- establishConnection base
-  -- print q
-  sendRequest c q emptyBody
-  receiveResponse c $ \response _ -> f response
-  -- TODO Connection won't be closed if `f` fails.
-  closeConnection c
-
-queryString :: [(ByteString, Maybe ByteString)] -> ByteString
-queryString [] = ""
-queryString xs = B.cons '?' . B.intercalate "&" . map f $ xs
-  where f (a, Just b) = B.concat [a, "=", b]
-        f (a, _) = a
-
-getImageJson :: ByteString -> ByteString
-  -> (Response -> Assertion) -> IO ()
-getImageJson host image f = withOpenSSL $ do
-  let url = B.concat ["/v1/images/" `B.append` image `B.append` "/json"]
-  q <- buildRequest $ do
-    http GET url
-    setAuthorizationBasic "quux" "thud"
-
-  c <- establishConnection $ "https://" `B.append` host
-  sendRequest c q emptyBody
-  receiveResponse c $ \response _ -> f response
-  closeConnection c
-
-putImageJson :: ByteString -> ByteString -> LB.ByteString
-  -> (Response -> Assertion) -> IO ()
-putImageJson host image json f = withOpenSSL $ do
-  let url = B.concat ["/v1/images/" `B.append` image `B.append` "/json"]
-      body = json
-  q <- buildRequest $ do
-    http PUT url
-    setAuthorizationBasic "quux" "thud"
-    setContentLength (fromIntegral $ LB.length body)
-    setContentType "application/json"
-
-  c <- establishConnection $ "https://" `B.append` host
-  body' <- Streams.fromLazyByteString body
-  sendRequest c q (inputStreamBody body')
-  receiveResponse c $ \response _ -> f response
-  closeConnection c
-
-putImageLayer :: ByteString -> ByteString -> LB.ByteString
-  -> (Response -> Assertion) -> IO ()
-putImageLayer host image layer f = withOpenSSL $ do
-  let namespace = "quux"
-      url = B.concat ["/v1/images/" `B.append` image `B.append` "/layer"]
-      body = layer
-  q <- buildRequest $ do
-    http PUT url
-    -- TODO The official registry does a 500 if there is no version.
-    setHeader "User-Agent" "fake-docker/1.1.2"
-    setAuthorizationBasic namespace "thud"
-    setTransferEncoding -- "chunked"
-
-  c <- establishConnection $ "https://" `B.append` host
-  body' <- Streams.fromLazyByteString body
-  sendRequest c q (inputStreamBody body')
-  receiveResponse c $ \response _ -> f response
-  closeConnection c
-
-putImageChecksum :: ByteString -> ByteString -> LB.ByteString
-  -> (Response -> Assertion) -> IO ()
-putImageChecksum host image checksum f = withOpenSSL $ do
-  let namespace = "quux"
-      url = B.concat ["/v1/images/" `B.append` image `B.append` "/checksum"]
-  q <- buildRequest $ do
-    http PUT url
-    -- TODO The official registry does a 500 if there is no version.
-    setHeader "User-Agent" "fake-docker/1.1.2"
-    setAuthorizationBasic namespace "thud"
-    -- TODO Older clients use tarsum+sha256
-    setHeader "X-Docker-Checksum-Payload" $ B.concat $ LB.toChunks checksum
-    setContentLength 0
-
-  c <- establishConnection $ "https://" `B.append` host
-  sendRequest c q emptyBody
-  receiveResponse c $ \response _ -> f response
-  closeConnection c
-
-putRepository :: ByteString -> LB.ByteString
-  -> (Response -> Assertion) -> IO ()
-putRepository host json f = withOpenSSL $ do
-  let namespace = "quux"
-      -- TODO The official registry accepts also quuxbar instead of quux/bar.
-      url = B.concat ["/v1/repositories/" `B.append` namespace `B.append` "/bar/"]
-      body = json
-  q <- buildRequest $ do
-    http PUT url
-    setAuthorizationBasic namespace "thud"
-    setContentLength (fromIntegral $ LB.length body)
-    setContentType "application/json"
-
-  c <- establishConnection $ "https://" `B.append` host
-  body' <- Streams.fromLazyByteString body
-  sendRequest c q (inputStreamBody body')
-  receiveResponse c $ \response _ -> f response
-  closeConnection c
-
-putRepositoryTag :: ByteString -> ByteString -> ByteString
-  -> (Response -> Assertion) -> IO ()
-putRepositoryTag host tag image f = withOpenSSL $ do
-  let namespace = "quux"
-      -- TODO The official registry accepts also quuxbar instead of quux/bar.
-      url = B.concat ["/v1/repositories/" `B.append` namespace `B.append` "/bar/tags/" `B.append` tag]
-      body = B.concat ["\"", image, "\""]
-  q <- buildRequest $ do
-    http PUT url
-    setAuthorizationBasic namespace "thud"
-    setContentLength (fromIntegral $ B.length body)
-    setContentType "application/json"
-
-  c <- establishConnection $ "https://" `B.append` host
-  body' <- Streams.fromByteString body
-  sendRequest c q (inputStreamBody body')
-  receiveResponse c $ \response _ -> f response
-  closeConnection c
+step _ _ = Nothing
