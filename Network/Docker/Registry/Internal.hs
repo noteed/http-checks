@@ -74,7 +74,7 @@ putImageLayer' credentials host image upload = withOpenSSL $ do
   q <- buildRequest $ do
     http PUT url
     -- TODO The official registry does a 500 if there is no version.
-    setHeader "User-Agent" "fake-docker/1.1.2"
+    setHeader "User-Agent" "docker/1.1.2-fake"
     maybe (return ()) (uncurry setAuthorizationBasic) credentials
     setTransferEncoding -- "chunked"
 
@@ -87,7 +87,7 @@ putImageChecksum credentials host image checksum = withOpenSSL $ do
   q <- buildRequest $ do
     http PUT url
     -- TODO The official registry does a 500 if there is no version.
-    setHeader "User-Agent" "fake-docker/1.1.2"
+    setHeader "User-Agent" "docker/1.1.2-fake"
     maybe (return ()) (uncurry setAuthorizationBasic) credentials
     -- TODO Older clients use tarsum+sha256
     setHeader "X-Docker-Checksum-Payload" $ B.concat $ LB.toChunks checksum

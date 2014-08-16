@@ -333,7 +333,9 @@ step _ (ImageLayerPushed []) = Just
   ( TestLabel "Trivial ImageLayerPushed" $ TestCase $ return (), ImagesPushed )
 
 step r (ImageLayerPushed [i]) = Just
-  ( checkPushImageJson 200 "Push correct image checksum." r i
+  -- TODO The official registry accepts re-pushing the json.
+  --( checkPushImageJson 200 "Push correct image json." r i
+  ( checkPushImageChecksum 200 "Push correct image checksum." r i
   , ImagesPushed )
 
 step r (ImageLayerPushed (i:is)) = Just
