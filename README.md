@@ -9,8 +9,8 @@ registry](https://github.com/docker/docker-registry) and the official registry
 behavior is more important that the specification which can be outdated.
 
 The client is written primarily to ensure the [Rescoyl
-registry](https://github.com/docker/docker-registry) behavior matches with the
-official registry but can be used to validate other implementions.
+registry](https://github.com/noteed/rescoyl) behavior matches with the official
+registry but can be used to validate other implementions.
 
 It is also possible to use this package as a library to write normal Docker
 registry clients.
