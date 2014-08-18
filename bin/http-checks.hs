@@ -23,8 +23,6 @@ hardCodedImage = B.replicate 64 '1'
 
 hardCodedRepository :: IO Repository
 hardCodedRepository = do
-  let credentials = Just ("quux", "thud")
-      host = "registry.local"
   -- TODO Official repository accepts non-hexadecimal characters for the
   -- image ID.
   -- TODO Official repository does 500 on non-ascii checksums.
@@ -39,13 +37,31 @@ hardCodedRepository = do
         , imageLayer = layer
         }
       r = Repository
-        { repositoryHost = host
-        , repositoryCredentials = credentials
+        { repositoryHost = "registry.local"
+        , repositoryCredentials = Just ("quux", "thud")
         , repositoryNamespace = "quux"
         , repositoryName = "bar"
         , repositoryImages = [(i, ["alpha", "beta"])]
         }
   return r
+
+exampleImage :: ByteString -> IO Image
+exampleImage i = do
+  return Image
+    { imageName = i
+    , imageLayer = ""
+    , imageJson = LB.fromChunks ["{\"id\":\"", i, "\"}"]
+    }
+
+exampleRepository :: ByteString -> IO Repository
+exampleRepository repo = do
+  return Repository
+    { repositoryHost = "registry.local"
+    , repositoryCredentials = Just ("quux", "thud")
+    , repositoryNamespace = "quux"
+    , repositoryName = repo
+    , repositoryImages = []
+    }
 
 main :: IO ()
 main = (runCmd =<<) $ cmdArgs $
@@ -54,6 +70,7 @@ main = (runCmd =<<) $ cmdArgs $
     , cmdDockerPushJson
     , cmdDockerPushRepository
     , cmdDockerFlow
+    , cmdDockerSuite
     , cmdDockerGenerate
     , cmdDockerAll
     , cmdDockerRemote
@@ -78,6 +95,7 @@ data Cmd =
   }
   | CmdDockerPushRepository
   | CmdDockerFlow
+  | CmdDockerSuite
   | CmdDockerGenerate
   | CmdDockerAll
   | CmdDockerRemote
@@ -114,10 +132,18 @@ cmdDockerPushRepository = CmdDockerPushRepository
 cmdDockerFlow :: Cmd
 cmdDockerFlow = CmdDockerFlow
     &= help "Push an empty repository to a Docker registry, \
-      \ push image meta data, image layer, image checksum. \
+      \push image meta data, image layer, image checksum. \
       \The repository must not exist."
     &= explicit
     &= name "docker-flow"
+
+-- | Create a 'DockerSuite' command.
+cmdDockerSuite :: Cmd
+cmdDockerSuite = CmdDockerSuite
+    &= help "A suite of hand-crafted tests (hopefully `docker-generate` \
+      \will be more exhaustive in the future)."
+    &= explicit
+    &= name "docker-suite"
 
 -- | Create a 'DockerGenerate' command.
 cmdDockerGenerate :: Cmd
@@ -235,6 +261,107 @@ runCmd CmdDockerFlow{..} = do
     ]
   return ()
 
+runCmd CmdDockerSuite{..} = do
+  r <- exampleRepository (error "Only the credentials are used.")
+  etc <- LB.readFile "etc.tar.gz"
+
+  -- The three 404 in the following tests demonstrate that the protocol
+  -- requires a strict ordering json -> layer -> checksum when pushing an
+  -- image.
+  --
+  -- This also shows that images can be pushed without reference to a
+  -- repository, or without being referenced by a repository.
+
+  i0 <- exampleImage "non-existing-0"
+  _ <- runTestTT $ TestList
+    [ testList "Pushing checksum only."
+      [ checkPushImageChecksum 404 "Push checksum for non-existing image." r i0
+      ]
+    ]
+
+  i1 <- exampleImage "non-existing-1"
+  _ <- runTestTT $ TestList
+    [ testList "Pushing json and checksum only."
+      -- TODO This test generates a 500:
+      -- https://github.com/docker/docker-registry/issues/527
+      [ checkPushImageJson 200 "Push image meta-data." r i1
+      , checkPushImageChecksum 404 "Push checksum for non-existing image." r i1
+      ]
+    ]
+
+  i2 <- exampleImage "non-existing-2"
+  _ <- runTestTT $ TestList
+    [ testList "Pushing layer only."
+      [ checkPushImageLayer 404 "Push image layer." r i2 { imageLayer = etc }
+      ]
+    ]
+
+  -- The following tests do the json -> layer -> checksum pushes in the correct
+  -- order, but try to repeat previous step(s).
+  --
+  -- Repeated jsons, or repeated layers are possible. On the other hand,
+  -- repeated checksums are not possible.
+  --
+  -- Pushing again json after the layer is possible.
+  --
+  -- Once the checksum is pushed, neither json, layer, or checksum can be
+  -- pushed again.
+
+  i3 <- exampleImage "non-existing-3"
+  _ <- runTestTT $ TestList
+    [ testList "Pushing json more than once."
+      [ checkPushImageJson 200 "Push image meta-data 1/3." r i3
+      , checkPushImageJson 200 "Push image meta-data 2/3." r i3
+      , checkPushImageJson 200 "Push image meta-data 3/3." r i3
+      ]
+    ]
+
+  i4 <- exampleImage "non-existing-4"
+  _ <- runTestTT $ TestList
+    [ testList "Pushing json then layer more than once."
+      [ checkPushImageJson 200 "Push image meta-data." r i4
+      , checkPushImageLayer 200 "Push image layer 1/3." r i4 { imageLayer = etc }
+      , checkPushImageLayer 200 "Push image layer 2/3." r i4 { imageLayer = etc }
+      , checkPushImageLayer 200 "Push image layer 3/3." r i4 { imageLayer = etc }
+      ]
+    ]
+
+  i5_ <- exampleImage "non-existing-5"
+  let i5 = i5_ { imageLayer = etc }
+  _ <- runTestTT $ TestList
+    [ testList "Pushing json, layer then checksum more than once."
+      [ checkPushImageJson 200 "Push image meta-data." r i5
+      , checkPushImageLayer 200 "Push image layer." r i5
+      , checkPushImageChecksum 200 "Push checksum for non-existing image 1/3." r i5
+      , checkPushImageChecksum 409 "Push checksum for non-existing image 2/3." r i5
+      , checkPushImageChecksum 409 "Push checksum for non-existing image 3/3." r i5
+      ]
+    ]
+
+  i6 <- exampleImage "non-existing-6"
+  _ <- runTestTT $ TestList
+    [ testList "Pushing json then layer, then json again."
+      [ checkPushImageJson 200 "Push image meta-data." r i6
+      , checkPushImageLayer 200 "Push image layer." r i6 { imageLayer = etc }
+      , checkPushImageJson 200 "Push image meta-data again." r i6
+      ]
+    ]
+
+  i7_ <- exampleImage "non-existing-7"
+  let i7 = i7_ { imageLayer = etc }
+  _ <- runTestTT $ TestList
+    [ testList "Pushing json, layer, checksum then json again."
+      [ checkPushImageJson 200 "Push image meta-data." r i7
+      , checkPushImageLayer 200 "Push image layer." r i7
+      , checkPushImageChecksum 200 "Push checksum for non-existing image." r i7
+      , checkPushImageJson 409 "Push image meta-data 1/3." r i7
+      , checkPushImageJson 409 "Push image meta-data 2/3." r i7
+      , checkPushImageJson 409 "Push image meta-data 3/3." r i7
+      ]
+    ]
+
+  return ()
+
 runCmd CmdDockerGenerate{..} = do
   layer <- LB.readFile "etc.tar.gz"
   let image0 = B.replicate 64 'b'
@@ -263,6 +390,7 @@ runCmd CmdDockerGenerate{..} = do
 runCmd CmdDockerAll{..} = do
   runCmd CmdDockerPushRepository
   runCmd CmdDockerFlow
+  runCmd CmdDockerSuite
   runCmd CmdDockerGenerate
   runCmd CmdDockerPushJson { cmdImage = B.unpack hardCodedImage }
 

@@ -40,6 +40,7 @@ pullImageJson :: Repository -> Image -> IO (Int, ByteString)
 pullImageJson Repository{..} Image{..} =
   getImageJson repositoryCredentials repositoryHost imageName
 
+pushImageLayer :: Repository -> Image -> IO Int
 pushImageLayer Repository{..} Image{..} =
   putImageLayer repositoryCredentials repositoryHost imageName imageLayer
 

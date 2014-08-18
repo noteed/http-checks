@@ -1,5 +1,5 @@
 name:                http-checks
-version:             0.0.2
+version:             0.0.3
 Cabal-Version:       >= 1.8
 synopsis:            Check HTTP services
 description:         This is a small library to write HUnit checks against live services.
