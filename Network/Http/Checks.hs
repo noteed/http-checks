@@ -1,5 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | HTTP checks as HUnit tests.
+-- | Basic HTTP checks as HUnit tests.
+-- This is intended to be a small library to write HUnit checks against live
+-- services.
+-- TODO Extract this module into its own library.
 module Network.Http.Checks where
 
 import Control.Monad (unless)

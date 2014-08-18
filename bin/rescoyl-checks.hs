@@ -76,12 +76,12 @@ main = (runCmd =<<) $ cmdArgs $
     , cmdDockerRemote
     ]
   &= summary versionString
-  &= program "http-checks"
+  &= program "rescoyl-checks"
 
 -- | String with the program name, version and copyright.
 versionString :: String
 versionString =
-  "http-checks " ++ showVersion version ++ " - Copyright (c) 2013-2014 Vo Minh Thu."
+  "rescoyl-checks " ++ showVersion version ++ " - Copyright (c) 2013-2014 Vo Minh Thu."
 
 ----------------------------------------------------------------------
 -- Command-line interface.

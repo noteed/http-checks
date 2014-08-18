@@ -1,8 +1,8 @@
-name:                http-checks
+name:                rescoyl-checks
 version:             0.0.3
 Cabal-Version:       >= 1.8
-synopsis:            Check HTTP services
-description:         This is a small library to write HUnit checks against live services.
+synopsis:            Docker registry conformance client
+description:         This is a Docker registry client to test a registry.
 category:            Development
 license:             BSD3
 license-file:        LICENSE
@@ -29,13 +29,13 @@ library
                        Network.Docker.Remote
   ghc-options:         -Wall
 
-executable http-checks
+executable rescoyl-checks
   hs-source-dirs:      bin
-  main-is:             http-checks.hs
+  main-is:             rescoyl-checks.hs
   build-depends:       base == 4.*,
                        bytestring == 0.9.*,
                        cmdargs == 0.9.*,
-                       http-checks,
+                       rescoyl-checks,
                        HUnit == 1.2.*
   ghc-options:         -Wall
                        -threaded
