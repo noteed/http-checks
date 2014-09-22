@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 -- | This is the bindings per-se to the Docker Registry API but you probably
 -- want to use the module `Network.Docker.Registry`. Still this module is
 -- available if you have your own data types to represent repositories and
@@ -51,11 +52,9 @@ putImageJson credentials host image json = withOpenSSL $ do
   sendAndReceive host q (inputStreamBody body') getStatusCode'
 
 -- | Upload an image layer.
-putImageLayer :: Credentials -> ByteString -> ByteString -> LB.ByteString -> IO Int
+putImageLayer :: Credentials -> ByteString -> ByteString -> LayerAsInput -> IO Int
 putImageLayer credentials host image layer = do
-  let upload o = do
-        body <- Streams.fromLazyByteString layer
-        inputStreamBody body o
+  let upload o = layer (\body -> inputStreamBody body o)
   putImageLayer' credentials host image upload
 
 -- | Upload an image layer but don't send the terminating chunk.
@@ -127,10 +126,12 @@ putRepositoryTag credentials host namespace repo tag image = withOpenSSL $ do
   body' <- Streams.fromByteString body
   sendAndReceive host q (inputStreamBody body') getStatusCode'
 
+sendAndReceive :: ByteString -> Request -> (OutputStream Builder -> IO ())
+  -> (Response -> Streams.InputStream ByteString -> IO a) -> IO a
 sendAndReceive host q body handler = do
   -- TODO Use bracket to close the connection.
   c <- establishConnection $ "https://" `B.append` host
-  sendRequest c q body
+  _ <- sendRequest c q body
   r <- receiveResponse c handler
   closeConnection c
   return r

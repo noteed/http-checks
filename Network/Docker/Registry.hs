@@ -9,6 +9,8 @@ import qualified Data.ByteString.Lazy as LB
 import qualified Data.ByteString.Lazy.Char8 as LC
 import Data.Digest.Pure.SHA (showDigest, sha256)
 import Data.List (intersperse)
+import System.IO.Streams.SHA
+import qualified System.IO.Streams as Streams
 
 import Network.Docker.Registry.Internal
 import Network.Docker.Registry.Types
@@ -45,8 +47,10 @@ pushImageLayer Repository{..} Image{..} =
   putImageLayer repositoryCredentials repositoryHost imageName imageLayer
 
 pushImageChecksum :: Repository -> Image -> IO Int
-pushImageChecksum Repository{..} i@Image{..} =
-  let checksum = imageChecksum i in
+pushImageChecksum Repository{..} i@Image{..} = do
+  -- TODO Compute the checksum when the layer is uploaded, and cache it
+  -- to re-use it here.
+  checksum <- imageChecksum i
   putImageChecksum repositoryCredentials repositoryHost imageName checksum
 
 ----------------------------------------------------------------------
@@ -60,12 +64,14 @@ repositoryJson Repository{..} = LB.fromChunks $
     repositoryImages
     ++ ["]"]
 
-imageChecksum :: Image -> LC.ByteString
-imageChecksum i = "sha256:" `LB.append` digest256
-  (LB.concat [imageJson i, "\n", imageLayer i])
-  -- TODO Use the incremental interface.
+imageChecksum :: Image -> IO LC.ByteString
+imageChecksum i = do
+  digest256 <- imageLayer i (\is -> do
+    j <- Streams.fromLazyByteString $ imageJson i `LB.append` "\n"
+    is' <- Streams.appendInputStream j is
+    (is'', getSha256) <- sha256Input is'
+    Streams.skipToEof is''
+    getSha256)
+  return $ "sha256:" `LB.append` (LC.pack $ showDigest digest256)
   -- The checksum used by Docker depends on the exact string representation of
   -- JSON meta-data...
-
-digest256 :: LC.ByteString -> LC.ByteString
-digest256 = LC.pack . showDigest . sha256

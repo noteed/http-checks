@@ -9,8 +9,9 @@ import qualified Data.ByteString.Lazy as LB
 import qualified Data.ByteString.Lazy.Char8 as LC
 import Data.List (unfoldr)
 import Data.Version (showVersion)
-import Paths_http_checks (version)
+import Paths_rescoyl_checks (version)
 import System.Console.CmdArgs.Implicit
+import qualified System.IO.Streams as Streams
 import Test.HUnit
 
 import Network.Docker.Registry.Checks
@@ -29,7 +30,7 @@ hardCodedRepository = do
   let image = hardCodedImage
       json = LB.fromChunks ["{\"id\":\"", image, "\"}"]
   -- TODO The layer is done with make-layer.sh.
-  layer <- LB.readFile "etc.tar.gz"
+      layer = Streams.withFileAsInput "etc.tar.gz"
 
   let i = Image
         { imageName = image
@@ -49,7 +50,7 @@ exampleImage :: ByteString -> IO Image
 exampleImage i = do
   return Image
     { imageName = i
-    , imageLayer = ""
+    , imageLayer = (\f -> Streams.fromByteString "" >>= f)
     , imageJson = LB.fromChunks ["{\"id\":\"", i, "\"}"]
     }
 
@@ -263,7 +264,8 @@ runCmd CmdDockerFlow{..} = do
 
 runCmd CmdDockerSuite{..} = do
   r <- exampleRepository (error "Only the credentials are used.")
-  etc <- LB.readFile "etc.tar.gz"
+  let etc = Streams.withFileAsInput "etc.tar.gz"
+      large = Streams.withFileAsInput "large.tar.gz"
 
   -- The three 404 in the following tests demonstrate that the protocol
   -- requires a strict ordering json -> layer -> checksum when pushing an
@@ -332,9 +334,9 @@ runCmd CmdDockerSuite{..} = do
     [ testList "Pushing json, layer then checksum more than once."
       [ checkPushImageJson 200 "Push image meta-data." r i5
       , checkPushImageLayer 200 "Push image layer." r i5
-      , checkPushImageChecksum 200 "Push checksum for non-existing image 1/3." r i5
-      , checkPushImageChecksum 409 "Push checksum for non-existing image 2/3." r i5
-      , checkPushImageChecksum 409 "Push checksum for non-existing image 3/3." r i5
+      , checkPushImageChecksum 200 "Push checksum for image 1/3." r i5
+      , checkPushImageChecksum 409 "Push checksum for image 2/3." r i5
+      , checkPushImageChecksum 409 "Push checksum for image 3/3." r i5
       ]
     ]
 
@@ -353,19 +355,29 @@ runCmd CmdDockerSuite{..} = do
     [ testList "Pushing json, layer, checksum then json again."
       [ checkPushImageJson 200 "Push image meta-data." r i7
       , checkPushImageLayer 200 "Push image layer." r i7
-      , checkPushImageChecksum 200 "Push checksum for non-existing image." r i7
+      , checkPushImageChecksum 200 "Push checksum." r i7
       , checkPushImageJson 409 "Push image meta-data 1/3." r i7
       , checkPushImageJson 409 "Push image meta-data 2/3." r i7
       , checkPushImageJson 409 "Push image meta-data 3/3." r i7
       ]
     ]
 
+  i8_ <- exampleImage "non-existing-8"
+  let i8 = i8_ { imageLayer = large }
+  _ <- runTestTT $ TestList
+    [ testList "Pushing json, large layer, checksum."
+      [ checkPushImageJson 200 "Push large image meta-data." r i8
+      , checkPushImageLayer 200 "Push large image layer." r i8
+      , checkPushImageChecksum 200 "Push checksum for large image." r i8
+      ]
+    ]
+
   return ()
 
 runCmd CmdDockerGenerate{..} = do
-  layer <- LB.readFile "etc.tar.gz"
   let image0 = B.replicate 64 'b'
       image1 = B.replicate 64 'c'
+      layer = Streams.withFileAsInput "etc.tar.gz"
   fromInitial Repository
     { repositoryHost = "registry.local"
     , repositoryCredentials = Just ("quux", "thud")

@@ -1,5 +1,5 @@
 name:                rescoyl-checks
-version:             0.0.3
+version:             0.0.4
 Cabal-Version:       >= 1.8
 synopsis:            Docker registry conformance client
 description:         This is a Docker registry client to test a registry.
@@ -20,7 +20,8 @@ library
                        http-streams == 0.8.*,
                        HUnit == 1.2.*,
                        io-streams == 1.1.*,
-                       SHA == 1.6.*
+                       SHA == 1.6.*,
+                       sha-streams == 0.1.*
   exposed-modules:     Network.Http.Checks,
                        Network.Docker.Registry,
                        Network.Docker.Registry.Checks,
@@ -36,6 +37,7 @@ executable rescoyl-checks
                        bytestring == 0.9.*,
                        cmdargs == 0.9.*,
                        rescoyl-checks,
-                       HUnit == 1.2.*
+                       HUnit == 1.2.*,
+                       io-streams == 1.1.*
   ghc-options:         -Wall
                        -threaded
